@@ -14,10 +14,16 @@ def index():
 
 @app.route('/form', methods=['GET', 'POST'])
 def form():
-    if request.method == 'POST':
-        invoice_id, pdf_filename = automation.process_order(request.form)
-        return render_template('success.html', invoice_id=invoice_id, pdf_filename=pdf_filename)
-    return render_template('form.html')
+    try:
+        if request.method == 'POST':
+            invoice_id, pdf_filename = automation.process_order(request.form)
+            return render_template('success.html', invoice_id=invoice_id, pdf_filename=pdf_filename)
+        return render_template('form.html')
+    except Exception as e:
+        print(f"ERROR CRITICO: {e}")
+        import traceback
+        traceback.print_exc()
+        return f"Ha ocurrido un error interno: {e}", 500
 
 @app.route('/dashboard')
 def dashboard():

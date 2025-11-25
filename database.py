@@ -2,7 +2,8 @@ import json
 import os
 from datetime import datetime
 
-DATA_DIR = 'data'
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DATA_DIR = os.path.join(BASE_DIR, 'data')
 DADES_FILE = os.path.join(DATA_DIR, 'dades.json')
 CLIENTS_FILE = os.path.join(DATA_DIR, 'clients.json')
 COMANDES_FILE = os.path.join(DATA_DIR, 'comandes.json')

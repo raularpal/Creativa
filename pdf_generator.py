@@ -1,7 +1,8 @@
 from fpdf import FPDF
 import os
 
-INVOICES_DIR = 'invoices'
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+INVOICES_DIR = os.path.join(BASE_DIR, 'invoices')
 
 class PDF(FPDF):
     def header(self):
