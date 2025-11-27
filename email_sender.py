@@ -3,6 +3,9 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.application import MIMEApplication
 import os
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # Configuration (In a real app, use Environment Variables)
 SMTP_SERVER = os.environ.get('SMTP_SERVER', 'smtp.gmail.com')
@@ -12,7 +15,7 @@ SMTP_PASSWORD = os.environ.get('SMTP_PASSWORD', 'tu_contraseña_de_aplicacion')
 
 def send_invoice_email(to_email, client_name, invoice_filename, invoice_path):
     msg = MIMEMultipart()
-    msg['Subject'] = f'Tu Factura de La Creativa - {invoice_filename}'
+    msg['Subject'] = f'Albarà La Creativa - {client_name}'
     msg['From'] = SMTP_USER
     msg['To'] = to_email
 

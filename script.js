@@ -1,11 +1,18 @@
-// Inicialitza EmailJS (hauràs de reemplaçar amb les teves pròpies claus)
-// Obtén claus gratuïtes a https://www.emailjs.com/
-const EMAILJS_PUBLIC_KEY = 'YOUR_PUBLIC_KEY'; // Reemplaça amb la teva clau pública d'EmailJS
-const EMAILJS_SERVICE_ID = 'YOUR_SERVICE_ID'; // Reemplaça amb el teu ID de servei
-const EMAILJS_TEMPLATE_ID = 'YOUR_TEMPLATE_ID'; // Reemplaça amb el teu ID de plantilla
+// Configuració EmailJS
+const EMAILJS_PUBLIC_KEY = 'TGdKTFye8bJ5CTA8X';
+const EMAILJS_SERVICE_ID = 'service_qph3d3n';
+const EMAILJS_TEMPLATE_ID = 'template_jrkiu39';
+
+// Configuració Supabase (per pujar PDFs)
+const SUPABASE_URL = 'https://vglkqvfseqxjvivcahcp.supabase.co';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZnbGtxdmZzZXF4anZpdmNhaGNwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjQyNDg1OTEsImV4cCI6MjA3OTgyNDU5MX0.Q-dh0dVcCj5vHEhIYrdYREqOtYoak-gpQHUUnFhTTR0';
 
 // Initialize EmailJS
 emailjs.init(EMAILJS_PUBLIC_KEY);
+
+// Initialize Supabase
+const { createClient } = supabase;
+const supabaseClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 // Storage keys
 const STORAGE_KEY = 'creativa_dades_invoices';
@@ -345,11 +352,42 @@ async function generatePDF(invoiceData) {
   return doc;
 }
 
-// Send email with PDF
-async function sendEmail(invoiceData, pdfDoc) {
+// Upload PDF to Supabase Storage and get public URL
+async function uploadPDFToStorage(pdfDoc, invoiceNumber) {
   try {
-    const pdfBase64 = pdfDoc.output('datauristring').split(',')[1];
+    // Convert PDF to Blob
+    const pdfBlob = pdfDoc.output('blob');
+    const fileName = `Factura_${invoiceNumber}_${Date.now()}.pdf`;
 
+    // Upload to Supabase Storage
+    const { data, error } = await supabaseClient.storage
+      .from('invoices')
+      .upload(fileName, pdfBlob, {
+        contentType: 'application/pdf',
+        cacheControl: '3600',
+        upsert: false
+      });
+
+    if (error) {
+      console.error('Error pujant PDF:', error);
+      throw error;
+    }
+
+    // Get public URL
+    const { data: { publicUrl } } = supabaseClient.storage
+      .from('invoices')
+      .getPublicUrl(fileName);
+
+    return publicUrl;
+  } catch (error) {
+    console.error('Error en uploadPDFToStorage:', error);
+    throw error;
+  }
+}
+
+// Send email with PDF download link
+async function sendEmail(invoiceData, downloadLink) {
+  try {
     const productsText = invoiceData.products.map(p =>
       `${p.name} - ${p.quantity}x ${p.price.toFixed(2)}€ = ${p.total.toFixed(2)}€`
     ).join('\n');
@@ -360,13 +398,113 @@ async function sendEmail(invoiceData, pdfDoc) {
       invoice_number: invoiceData.invoiceNumber,
       amount: invoiceData.total.toFixed(2),
       products: productsText,
-      pdf_attachment: pdfBase64
+      download_link: downloadLink
     };
 
     await emailjs.send(EMAILJS_SERVICE_ID, EMAILJS_TEMPLATE_ID, templateParams);
     return true;
   } catch (error) {
     console.error('Error enviant correu:', error);
+    return false;
+  }
+}
+
+// Save invoice to Supabase database
+async function saveInvoiceToSupabase(invoiceData, downloadLink) {
+  try {
+    // Prepare invoice data for database
+    const invoiceRecord = {
+      invoice_id: invoiceData.invoiceNumber,
+      document_type: invoiceData.documentType,
+      date: new Date().toISOString(),
+      entry_date: invoiceData.entryDate,
+      delivery_date: invoiceData.deliveryDate !== 'dd/mm/aaaa' ? invoiceData.deliveryDate : null,
+      client_name: invoiceData.client,
+      client_nif: invoiceData.dni,
+      client_phone: invoiceData.phone,
+      client_email: invoiceData.email,
+      client_address: invoiceData.address,
+      client_city: invoiceData.city,
+      client_zip: invoiceData.postalCode,
+      items: invoiceData.products,
+      subtotal: invoiceData.subtotal,
+      iva_applied: invoiceData.applyIva,
+      iva_total: invoiceData.iva,
+      total_general: invoiceData.total,
+      payment_method: invoiceData.paymentMethod || null,
+      paid_status: invoiceData.paidStatus || null,
+      pdf_url: downloadLink
+    };
+
+    const { data, error } = await supabaseClient
+      .from('invoices')
+      .insert([invoiceRecord]);
+
+    if (error) {
+      console.error('Error guardant factura a Supabase:', error);
+      return false;
+    }
+
+    console.log('Factura guardada a Supabase:', data);
+    return true;
+  } catch (error) {
+    console.error('Error en saveInvoiceToSupabase:', error);
+    return false;
+  }
+}
+
+// Save or update client in Supabase
+async function saveClientToSupabase(invoiceData) {
+  try {
+    // Check if client already exists
+    const { data: existingClients, error: searchError } = await supabaseClient
+      .from('clients')
+      .select('*')
+      .or(`phone.eq.${invoiceData.phone},email.eq.${invoiceData.email}`);
+
+    if (searchError) {
+      console.error('Error buscant client:', searchError);
+    }
+
+    const clientRecord = {
+      name: invoiceData.client,
+      nif: invoiceData.dni,
+      phone: invoiceData.phone,
+      email: invoiceData.email,
+      address: invoiceData.address,
+      city: invoiceData.city,
+      postal_code: invoiceData.postalCode,
+      last_purchase: new Date().toISOString()
+    };
+
+    if (existingClients && existingClients.length > 0) {
+      // Update existing client
+      const { error: updateError } = await supabaseClient
+        .from('clients')
+        .update(clientRecord)
+        .eq('id', existingClients[0].id);
+
+      if (updateError) {
+        console.error('Error actualitzant client:', updateError);
+        return false;
+      }
+      console.log('Client actualitzat a Supabase');
+    } else {
+      // Insert new client
+      const { error: insertError } = await supabaseClient
+        .from('clients')
+        .insert([clientRecord]);
+
+      if (insertError) {
+        console.error('Error guardant client:', insertError);
+        return false;
+      }
+      console.log('Client guardat a Supabase');
+    }
+
+    return true;
+  } catch (error) {
+    console.error('Error en saveClientToSupabase:', error);
     return false;
   }
 }
@@ -448,26 +586,38 @@ document.getElementById('invoice-form').addEventListener('submit', async (e) => 
     showStatus('Generant factura...', 'success');
 
     // Generar PDF
-    // Generar PDF
     const pdf = await generatePDF(invoiceData);
-
-
 
     // Descarregar PDF
     pdf.save(`Factura_${invoiceData.invoiceNumber}.pdf`);
 
-    // Enviar correu (només si EmailJS està configurat)
-    if (EMAILJS_PUBLIC_KEY !== 'YOUR_PUBLIC_KEY') {
-      showStatus('Enviant correu...', 'success');
-      const emailSent = await sendEmail(invoiceData, pdf);
+    // Enviar correu (només si EmailJS i Supabase estan configurats)
+    if (EMAILJS_PUBLIC_KEY !== 'YOUR_PUBLIC_KEY' && SUPABASE_URL !== 'YOUR_SUPABASE_URL') {
+      showStatus('Pujant PDF a Supabase...', 'success');
 
-      if (emailSent) {
-        showStatus('✓ Factura generada i enviada correctament', 'success');
-      } else {
-        showStatus('✓ Factura generada. Error en enviar el correu.', 'error');
+      try {
+        // Upload PDF to Supabase and get download link
+        const downloadLink = await uploadPDFToStorage(pdf, invoiceData.invoiceNumber);
+
+        showStatus('Enviant correu...', 'success');
+        const emailSent = await sendEmail(invoiceData, downloadLink);
+
+        // Save to Supabase database
+        showStatus('Guardant dades a Supabase...', 'success');
+        await saveInvoiceToSupabase(invoiceData, downloadLink);
+        await saveClientToSupabase(invoiceData);
+
+        if (emailSent) {
+          showStatus('✓ Factura generada, guardada i enviada correctament', 'success');
+        } else {
+          showStatus('✓ Factura generada i guardada. Error en enviar el correu.', 'error');
+        }
+      } catch (uploadError) {
+        console.error('Error pujant PDF:', uploadError);
+        showStatus('✓ Factura generada. Error pujant el PDF.', 'error');
       }
     } else {
-      showStatus('✓ Factura generada. Configura EmailJS per enviar correus.', 'success');
+      showStatus('✓ Factura generada. Configura EmailJS i Supabase per enviar correus.', 'success');
     }
 
     // Save to localStorage

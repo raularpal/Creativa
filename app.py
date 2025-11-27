@@ -1,6 +1,10 @@
 from flask import Flask, request, jsonify, send_from_directory
-import database
+from flask import Flask, request, jsonify, send_from_directory
+import supabase_db as database
 import os
+from dotenv import load_dotenv
+
+load_dotenv()
 
 app = Flask(__name__, static_folder='.', static_url_path='')
 
