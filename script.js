@@ -95,16 +95,29 @@ async function fetchClients() {
 }
 
 // Generate document number from Supabase count
+// Generate document number from Supabase (finding the last one)
 async function generateDocumentNumber(documentType) {
   try {
-    const { count, error } = await supabaseClient
+    // Get the last invoice ID for this document type to ensure we increment correctly
+    const { data, error } = await supabaseClient
       .from('invoices')
-      .select('*', { count: 'exact', head: true })
-      .eq('document_type', documentType);
+      .select('invoice_id')
+      .eq('document_type', documentType)
+      .order('invoice_id', { ascending: false })
+      .limit(1);
 
     if (error) throw error;
 
-    const nextNum = (count || 0) + 1;
+    let nextNum = 1;
+    if (data && data.length > 0) {
+      const lastId = data[0].invoice_id;
+      // Extract numeric part (assuming format C0001, P0001)
+      const numericPart = parseInt(lastId.substring(1));
+      if (!isNaN(numericPart)) {
+        nextNum = numericPart + 1;
+      }
+    }
+
     const prefix = documentType === 'Comanda' ? 'C' : 'P';
     const number = nextNum.toString().padStart(4, '0');
     return `${prefix}${number}`;
@@ -318,8 +331,9 @@ async function generatePDF(invoiceData) {
 
   // Payment Method Value (Normal)
   doc.setFont(undefined, 'normal');
-  doc.text(payMethodVal, currentX + wMethodLbl, preTableY);
-  const wMethodVal = doc.getTextWidth(payMethodVal);
+  const payMethodValStr = String(payMethodVal || '');
+  doc.text(payMethodValStr, currentX + wMethodLbl, preTableY);
+  const wMethodVal = doc.getTextWidth(payMethodValStr);
 
   currentX += wMethodLbl + wMethodVal + paymentGap;
 
@@ -330,7 +344,8 @@ async function generatePDF(invoiceData) {
 
   // Paid Value (Normal)
   doc.setFont(undefined, 'normal');
-  doc.text(paidVal, currentX + wPaidLbl, preTableY);
+  const paidValStr = String(paidVal || '');
+  doc.text(paidValStr, currentX + wPaidLbl, preTableY);
 
   // Preparar datos de la tabla
   const tableData = invoiceData.products.map(product => {
