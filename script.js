@@ -21,39 +21,98 @@ const COUNTERS_KEY = 'creativa_dades_counters';
 const IVA_RATE = 0.21; // 21%
 let productCount = 1;
 
-// Get document counters
-function getCounters() {
-  const data = localStorage.getItem(COUNTERS_KEY);
-  return data ? JSON.parse(data) : { Comanda: 0, Pressupost: 0 };
+// Map invoice from DB to App format
+function mapInvoiceFromDB(dbInvoice) {
+  return {
+    invoiceNumber: dbInvoice.invoice_id,
+    documentType: dbInvoice.document_type,
+    entryDate: dbInvoice.entry_date,
+    deliveryDate: dbInvoice.delivery_date || 'dd/mm/aaaa',
+    client: dbInvoice.client_name,
+    dni: dbInvoice.client_nif,
+    phone: dbInvoice.client_phone,
+    email: dbInvoice.client_email,
+    address: dbInvoice.client_address,
+    city: dbInvoice.client_city,
+    postalCode: dbInvoice.client_zip,
+    products: dbInvoice.items,
+    subtotal: dbInvoice.subtotal,
+    applyIva: dbInvoice.iva_applied,
+    iva: dbInvoice.iva_total,
+    total: dbInvoice.total_general,
+    paymentMethod: dbInvoice.payment_method,
+    paidStatus: dbInvoice.paid_status || 'No',
+    pdfUrl: dbInvoice.pdf_url,
+    timestamp: new Date(dbInvoice.date).getTime()
+  };
 }
 
-// Save counters
-function saveCounters(counters) {
-  localStorage.setItem(COUNTERS_KEY, JSON.stringify(counters));
+// Map client from DB to App format
+function mapClientFromDB(dbClient) {
+  return {
+    client: dbClient.name,
+    dni: dbClient.nif,
+    phone: dbClient.phone,
+    email: dbClient.email,
+    address: dbClient.address,
+    city: dbClient.city,
+    postalCode: dbClient.postal_code,
+    invoiceCount: dbClient.total_orders || 0,
+    totalAmount: dbClient.total_spent || 0
+  };
 }
 
-// Generate document number
-function generateDocumentNumber(documentType) {
-  const counters = getCounters();
-  counters[documentType] = (counters[documentType] || 0) + 1;
-  saveCounters(counters);
+// Fetch invoices from Supabase
+async function fetchInvoices() {
+  try {
+    const { data, error } = await supabaseClient
+      .from('invoices')
+      .select('*')
+      .order('date', { ascending: false });
 
-  const prefix = documentType === 'Comanda' ? 'C' : 'P';
-  const number = counters[documentType].toString().padStart(4, '0');
-  return `${prefix}${number}`;
+    if (error) throw error;
+    return data.map(mapInvoiceFromDB);
+  } catch (error) {
+    console.error('Error fetching invoices:', error);
+    return [];
+  }
 }
 
-// Get invoices from localStorage
-function getInvoices() {
-  const data = localStorage.getItem(STORAGE_KEY);
-  return data ? JSON.parse(data) : [];
+// Fetch clients from Supabase
+async function fetchClients() {
+  try {
+    const { data, error } = await supabaseClient
+      .from('clients')
+      .select('*')
+      .order('name', { ascending: true });
+
+    if (error) throw error;
+    return data.map(mapClientFromDB);
+  } catch (error) {
+    console.error('Error fetching clients:', error);
+    return [];
+  }
 }
 
-// Save invoice to localStorage
-function saveInvoice(invoice) {
-  const invoices = getInvoices();
-  invoices.push(invoice);
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(invoices));
+// Generate document number from Supabase count
+async function generateDocumentNumber(documentType) {
+  try {
+    const { count, error } = await supabaseClient
+      .from('invoices')
+      .select('*', { count: 'exact', head: true })
+      .eq('document_type', documentType);
+
+    if (error) throw error;
+
+    const nextNum = (count || 0) + 1;
+    const prefix = documentType === 'Comanda' ? 'C' : 'P';
+    const number = nextNum.toString().padStart(4, '0');
+    return `${prefix}${number}`;
+  } catch (error) {
+    console.error('Error generating document number:', error);
+    // Fallback to timestamp if error
+    return `${documentType === 'Comanda' ? 'C' : 'P'}${Date.now().toString().slice(-4)}`;
+  }
 }
 
 
@@ -558,7 +617,7 @@ document.getElementById('invoice-form').addEventListener('submit', async (e) => 
   const iva = total - subtotal;
 
   const documentType = formData.get('document-type');
-  const documentNumber = generateDocumentNumber(documentType);
+  const documentNumber = await generateDocumentNumber(documentType);
 
   const invoiceData = {
     invoiceNumber: documentNumber,
@@ -621,7 +680,8 @@ document.getElementById('invoice-form').addEventListener('submit', async (e) => 
     }
 
     // Save to localStorage
-    saveInvoice(invoiceData);
+    // No need to save to localStorage anymore
+    // saveInvoice(invoiceData);
 
     // Reset form
     e.target.reset();
@@ -674,36 +734,15 @@ document.getElementById('invoice-form').addEventListener('submit', async (e) => 
 });
 
 // Load clients table
-function loadClients(searchTerm = '') {
-  const invoices = getInvoices();
+// Load clients table
+async function loadClients(searchTerm = '') {
+  const clients = await fetchClients();
 
-  // Group by phone number
-  const clientsMap = {};
-
-  invoices.forEach(inv => {
-    if (!clientsMap[inv.phone]) {
-      clientsMap[inv.phone] = {
-        client: inv.client,
-        phone: inv.phone,
-        email: inv.email,
-        address: inv.address,
-        city: inv.city,
-        postalCode: inv.postalCode,
-        dni: inv.dni,
-        invoiceCount: 0,
-        totalAmount: 0
-      };
-    }
-    clientsMap[inv.phone].invoiceCount++;
-    clientsMap[inv.phone].totalAmount += parseFloat(inv.total);
-  });
-
-  // Convert to array and filter by search term
-  let clients = Object.values(clientsMap);
-
+  // Filter by search term
+  let filteredClients = clients;
   if (searchTerm) {
     const term = searchTerm.toLowerCase();
-    clients = clients.filter(c =>
+    filteredClients = clients.filter(c =>
       c.client.toLowerCase().includes(term) ||
       c.phone.includes(term) ||
       c.email.toLowerCase().includes(term) ||
@@ -727,7 +766,7 @@ function loadClients(searchTerm = '') {
           </tr>
         </thead>
         <tbody>
-          ${clients.map(c => `
+          ${filteredClients.map(c => `
             <tr>
               <td>${c.client}</td>
               <td>${c.phone}</td>
@@ -743,7 +782,7 @@ function loadClients(searchTerm = '') {
     </div>
   `;
 
-  document.getElementById('clients-table-container').innerHTML = clients.length > 0
+  document.getElementById('clients-table-container').innerHTML = filteredClients.length > 0
     ? tableHTML
     : '<p style="text-align: center; color: var(--text-muted); margin-top: 2rem;">No hi ha clients</p>';
 }
@@ -751,7 +790,7 @@ function loadClients(searchTerm = '') {
 
 // Download PDF
 async function downloadPDF(invoiceNumber) {
-  const invoices = getInvoices();
+  const invoices = await fetchInvoices();
   const invoiceData = invoices.find(inv => inv.invoiceNumber === invoiceNumber);
 
   if (invoiceData) {
@@ -770,8 +809,9 @@ async function downloadPDF(invoiceNumber) {
 }
 
 // Load invoices table
-function loadInvoicesTable(startDate = null, endDate = null, documentNumber = null, clientSearch = null, paidStatus = null) {
-  let invoices = getInvoices();
+// Load invoices table
+async function loadInvoicesTable(startDate = null, endDate = null, documentNumber = null, clientSearch = null, paidStatus = null) {
+  let invoices = await fetchInvoices();
 
   // Filter by client search (name, phone, email, dni)
   if (clientSearch) {
@@ -877,51 +917,57 @@ function clearFilters() {
 }
 
 // Edit delivery date inline
-function editDeliveryDate(invoiceNumber) {
-  const invoices = getInvoices();
-  const invoice = invoices.find(inv => inv.invoiceNumber === invoiceNumber);
+// Edit delivery date inline
+async function editDeliveryDate(invoiceNumber) {
+  const newDate = prompt('Nova data d\'entrega (DD/MM/YYYY):');
 
-  if (!invoice) return;
+  if (newDate) {
+    try {
+      const { error } = await supabaseClient
+        .from('invoices')
+        .update({ delivery_date: newDate })
+        .eq('invoice_id', invoiceNumber);
 
-  const newDate = prompt('Nova data d\'entrega (DD/MM/YYYY):', invoice.deliveryDate);
-
-  if (newDate && newDate !== invoice.deliveryDate) {
-    invoice.deliveryDate = newDate;
-
-    // Update in localStorage
-    const allInvoices = getInvoices();
-    const index = allInvoices.findIndex(inv => inv.invoiceNumber === invoiceNumber);
-    if (index !== -1) {
-      allInvoices[index] = invoice;
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(allInvoices));
+      if (error) throw error;
 
       // Reload table
       loadInvoicesTable();
       showStatus('✓ Data d\'entrega actualitzada', 'success');
+    } catch (error) {
+      console.error('Error updating delivery date:', error);
+      showStatus('Error actualitzant la data', 'error');
     }
   }
 }
 
 // Edit paid status inline
-function editPaidStatus(invoiceNumber) {
-  const invoices = getInvoices();
-  const invoice = invoices.find(inv => inv.invoiceNumber === invoiceNumber);
+async function editPaidStatus(invoiceNumber) {
+  // First get current status
+  try {
+    const { data, error: fetchError } = await supabaseClient
+      .from('invoices')
+      .select('paid_status')
+      .eq('invoice_id', invoiceNumber)
+      .single();
 
-  if (!invoice) return;
+    if (fetchError) throw fetchError;
 
-  const newStatus = invoice.paidStatus === 'Sí' ? 'No' : 'Sí';
-  invoice.paidStatus = newStatus;
+    const currentStatus = data.paid_status || 'No';
+    const newStatus = currentStatus === 'Sí' ? 'No' : 'Sí';
 
-  // Update in localStorage
-  const allInvoices = getInvoices();
-  const index = allInvoices.findIndex(inv => inv.invoiceNumber === invoiceNumber);
-  if (index !== -1) {
-    allInvoices[index] = invoice;
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(allInvoices));
+    const { error: updateError } = await supabaseClient
+      .from('invoices')
+      .update({ paid_status: newStatus })
+      .eq('invoice_id', invoiceNumber);
+
+    if (updateError) throw updateError;
 
     // Reload table
     loadInvoicesTable();
     showStatus(`✓ Estat de pagament canviat a: ${newStatus}`, 'success');
+  } catch (error) {
+    console.error('Error updating paid status:', error);
+    showStatus('Error actualitzant l\'estat', 'error');
   }
 }
 
