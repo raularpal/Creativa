@@ -20,6 +20,8 @@ const STORAGE_KEY = 'creativa_dades_invoices';
 const COUNTERS_KEY = 'creativa_dades_counters';
 const IVA_RATE = 0.21; // 21%
 let productCount = 1;
+let isEditingInvoice = false;
+let editingInvoiceData = null;
 
 // Map invoice from DB to App format
 function mapInvoiceFromDB(dbInvoice) {
@@ -42,6 +44,8 @@ function mapInvoiceFromDB(dbInvoice) {
     total: dbInvoice.total_general,
     paymentMethod: dbInvoice.payment_method,
     paidStatus: dbInvoice.paid_status || 'No',
+    discount: dbInvoice.discount,
+    observations: dbInvoice.observations,
     pdfUrl: dbInvoice.pdf_url,
     timestamp: new Date(dbInvoice.date).getTime()
   };
@@ -134,14 +138,22 @@ async function generateDocumentNumber(documentType) {
 function calculateTotal() {
   let total = 0;
   const applyIva = document.getElementById('apply-iva').checked;
+  const discountInput = document.getElementById('discount');
+  const discount = discountInput ? (parseFloat(discountInput.value) || 0) : 0;
 
   for (let i = 1; i <= productCount; i++) {
     const priceInput = document.getElementById(`product-${i}-price`);
     const quantityInput = document.getElementById(`product-${i}-quantity`);
 
     if (priceInput && quantityInput) {
-      const price = parseFloat(priceInput.value) || 0;
+      let price = parseFloat(priceInput.value) || 0;
       const quantity = parseInt(quantityInput.value) || 0;
+
+      // Apply discount to unit price
+      if (discount > 0) {
+        price = price * (1 - discount / 100);
+      }
+
       let lineTotal = price * quantity;
 
       if (applyIva) {
@@ -348,24 +360,66 @@ async function generatePDF(invoiceData) {
   doc.text(paidValStr, currentX + wPaidLbl, preTableY);
 
   // Preparar datos de la tabla
+  const hasDiscount = invoiceData.discount && invoiceData.discount > 0;
+
   const tableData = invoiceData.products.map(product => {
     const ivaAmount = invoiceData.applyIva ? product.total * IVA_RATE : 0;
     const subtotal = product.total + ivaAmount;
-    return [
-      product.name,
-      product.quantity.toString(),
-      product.price.toFixed(2),
-      ivaAmount.toFixed(2),
-      subtotal.toFixed(2)
-    ];
+
+    if (hasDiscount) {
+      // El precio ya viene con descuento aplicado desde el formulario
+      const priceWithDiscount = product.price;
+      const ivaOnDiscountedPrice = invoiceData.applyIva ? priceWithDiscount * product.quantity * IVA_RATE : 0;
+      const subtotalWithDiscount = (priceWithDiscount * product.quantity) + ivaOnDiscountedPrice;
+
+      return [
+        product.name,
+        product.quantity.toString(),
+        // Calculamos el precio original para mostrarlo en la columna de precio unitario
+        (priceWithDiscount / (1 - invoiceData.discount / 100)).toFixed(2),
+        ivaOnDiscountedPrice.toFixed(2),
+        priceWithDiscount.toFixed(2), // Precio con descuento
+        subtotalWithDiscount.toFixed(2)
+      ];
+    } else {
+      return [
+        product.name,
+        product.quantity.toString(),
+        product.price.toFixed(2),
+        ivaAmount.toFixed(2),
+        subtotal.toFixed(2)
+      ];
+    }
   });
 
   // Tabla de productos (empezar más abajo para dar espacio a la línea anterior)
   const startY = 57;
+
+  const tableHeaders = hasDiscount
+    ? [['Producte', 'Quantitat', 'Preu Unitari (€)', 'IVA 21% (€)', `Preu amb descompte del ${invoiceData.discount}% (€)`, 'Subtotal (€)']]
+    : [['Producte', 'Quantitat', 'Preu Unitari (€)', 'IVA 21% (€)', 'Subtotal (€)']];
+
+  const columnStyles = hasDiscount
+    ? {
+      0: { halign: 'left' },
+      1: { halign: 'center' },
+      2: { halign: 'center' },
+      3: { halign: 'center' },
+      4: { halign: 'center' },
+      5: { halign: 'center' }
+    }
+    : {
+      0: { halign: 'left' },
+      1: { halign: 'center' },
+      2: { halign: 'center' },
+      3: { halign: 'center' },
+      4: { halign: 'center' }
+    };
+
   doc.autoTable({
     startY: startY,
     margin: { left: 20, right: 15 },
-    head: [['Producte', 'Quantitat', 'Preu Unitari (€)', 'IVA 21% (€)', 'Subtotal (€)']],
+    head: tableHeaders,
     body: tableData,
     theme: 'grid',
     styles: {
@@ -383,13 +437,7 @@ async function generatePDF(invoiceData) {
       fontStyle: 'bold',
       halign: 'center'
     },
-    columnStyles: {
-      0: { halign: 'left' },
-      1: { halign: 'center' },
-      2: { halign: 'center' },
-      3: { halign: 'center' },
-      4: { halign: 'center' }
-    },
+    columnStyles: columnStyles,
     didDrawPage: function (data) {
       // Footer is drawn after table
     }
@@ -422,6 +470,22 @@ async function generatePDF(invoiceData) {
   const boxHeight = pageHeight - boxStartY - 10; // Altura hasta el final menos margen inferior
   doc.setDrawColor(0, 0, 0);
   doc.rect(20, boxStartY, 262, boxHeight); // x, y, w, h
+
+  // Add observations text inside the box
+  if (invoiceData.observations && invoiceData.observations.trim()) {
+    doc.setFontSize(11);
+    doc.setFont(undefined, 'normal');
+    doc.setTextColor(0, 0, 0);
+    const observationsText = doc.splitTextToSize(invoiceData.observations, 252);
+    doc.text(observationsText, 25, boxStartY + 7);
+  }
+
+  // Add vertical guide line at center (0.5cm = 5mm)
+  const pageWidth = 297; // A4 landscape width in mm
+  const centerX = pageWidth / 2;
+  const lineLength = 5; // 0.5cm
+  doc.setLineWidth(0.3);
+  doc.line(centerX, 5, centerX, 5 + lineLength);
 
   return doc;
 }
@@ -507,6 +571,8 @@ async function saveInvoiceToSupabase(invoiceData, downloadLink) {
       total_general: invoiceData.total,
       payment_method: invoiceData.paymentMethod || null,
       paid_status: invoiceData.paidStatus || null,
+      discount: invoiceData.discount || null,
+      observations: invoiceData.observations || null,
       pdf_url: downloadLink
     };
 
@@ -583,6 +649,52 @@ async function saveClientToSupabase(invoiceData) {
   }
 }
 
+// Update invoice in Supabase
+async function updateInvoiceInSupabase(invoiceData, downloadLink) {
+  try {
+    // Prepare invoice data for database
+    const invoiceRecord = {
+      document_type: invoiceData.documentType,
+      date: new Date().toISOString(),
+      entry_date: invoiceData.entryDate,
+      delivery_date: invoiceData.deliveryDate !== 'dd/mm/aaaa' ? invoiceData.deliveryDate : null,
+      client_name: invoiceData.client,
+      client_nif: invoiceData.dni,
+      client_phone: invoiceData.phone,
+      client_email: invoiceData.email,
+      client_address: invoiceData.address,
+      client_city: invoiceData.city,
+      client_zip: invoiceData.postalCode,
+      items: invoiceData.products,
+      subtotal: invoiceData.subtotal,
+      iva_applied: invoiceData.applyIva,
+      iva_total: invoiceData.iva,
+      total_general: invoiceData.total,
+      payment_method: invoiceData.paymentMethod || null,
+      paid_status: invoiceData.paidStatus || null,
+      discount: invoiceData.discount || null,
+      observations: invoiceData.observations || null,
+      pdf_url: downloadLink
+    };
+
+    const { data, error } = await supabaseClient
+      .from('invoices')
+      .update(invoiceRecord)
+      .eq('invoice_id', invoiceData.invoiceNumber);
+
+    if (error) {
+      console.error('Error actualitzant factura a Supabase:', error);
+      return false;
+    }
+
+    console.log('Factura actualitzada a Supabase:', data);
+    return true;
+  } catch (error) {
+    console.error('Error en updateInvoiceInSupabase:', error);
+    return false;
+  }
+}
+
 // Show status message
 function showStatus(message, type) {
   const statusDiv = document.getElementById('status');
@@ -594,6 +706,117 @@ function showStatus(message, type) {
   }, 5000);
 }
 
+// Load invoice into form for editing
+async function editInvoice(invoiceNumber) {
+  const invoices = await fetchInvoices();
+  const invoice = invoices.find(inv => inv.invoiceNumber === invoiceNumber);
+
+  if (!invoice) {
+    alert('Factura no trobada');
+    return;
+  }
+
+  // Set editing mode
+  isEditingInvoice = true;
+  editingInvoiceData = invoice;
+
+  // Switch to form section
+  showSection('form');
+
+  // Fill form fields
+  document.getElementById('document-type').value = invoice.documentType;
+  document.getElementById('client').value = invoice.client;
+  document.getElementById('phone').value = invoice.phone;
+  document.getElementById('address').value = invoice.address || '';
+  document.getElementById('city').value = invoice.city || '';
+  document.getElementById('postal-code').value = invoice.postalCode || '';
+  document.getElementById('email').value = invoice.email || '';
+  document.getElementById('dni').value = invoice.dni || '';
+  document.getElementById('payment-method').value = invoice.paymentMethod || '';
+  document.getElementById('paid-status').value = invoice.paidStatus || '';
+  document.getElementById('apply-iva').checked = invoice.applyIva;
+  document.getElementById('discount').value = invoice.discount || '';
+  document.getElementById('observations').value = invoice.observations || '';
+
+  // Set delivery date if exists
+  if (invoice.deliveryDate && invoice.deliveryDate !== 'dd/mm/aaaa') {
+    const parts = invoice.deliveryDate.split('/');
+    if (parts.length === 3) {
+      const dateStr = `${parts[2]}-${parts[1]}-${parts[0]}`;
+      document.getElementById('delivery-date').value = dateStr;
+    }
+  }
+
+  // Clear existing products
+  const container = document.getElementById('products-container');
+  container.innerHTML = '';
+  productCount = 0;
+
+  // Add products
+  invoice.products.forEach((product, index) => {
+    productCount++;
+
+    // Determine price to show in form (original price before discount)
+    let priceToShow = product.price;
+    if (product.originalPrice) {
+      priceToShow = product.originalPrice;
+    } else if (invoice.discount && invoice.discount > 0) {
+      // If no originalPrice stored but there is discount, reverse calculation
+      priceToShow = product.price / (1 - invoice.discount / 100);
+    }
+
+    const productHTML = `
+      <div class="product-item" data-product="${productCount}">
+        <h4>Producte ${productCount}</h4>
+        <div class="product-fields">
+          <div class="field-group">
+            <label for="product-${productCount}-name">Nom del producte:</label>
+            <input type="text" id="product-${productCount}-name" name="product-${productCount}-name" value="${product.name}" required />
+          </div>
+          <div class="field-group">
+            <label for="product-${productCount}-price">Preu unitari (€):</label>
+            <input type="number" step="0.01" id="product-${productCount}-price" name="product-${productCount}-price" value="${priceToShow.toFixed(2)}" required />
+          </div>
+          <div class="field-group">
+            <label for="product-${productCount}-quantity">Quantitat:</label>
+            <input type="number" step="1" id="product-${productCount}-quantity" name="product-${productCount}-quantity" value="${product.quantity}" required />
+          </div>
+        </div>
+      </div>
+    `;
+    container.insertAdjacentHTML('beforeend', productHTML);
+
+    // Add event listeners
+    document.getElementById(`product-${productCount}-price`).addEventListener('input', calculateTotal);
+    document.getElementById(`product-${productCount}-quantity`).addEventListener('input', calculateTotal);
+  });
+
+  // Update add product checkbox
+  const addProductContainer = document.getElementById('add-product-container');
+  if (productCount < 6) {
+    addProductContainer.innerHTML = `
+      <input type="checkbox" id="add-product-${productCount + 1}" />
+      <label for="add-product-${productCount + 1}" class="checkbox-label">Afegir Producte ${productCount + 1}</label>
+    `;
+    addProductContainer.style.display = 'flex';
+
+    document.getElementById(`add-product-${productCount + 1}`).addEventListener('change', function (e) {
+      if (e.target.checked) {
+        productCount++;
+        addProduct(productCount);
+      }
+    });
+  } else {
+    addProductContainer.style.display = 'none';
+  }
+
+  // Recalculate total
+  calculateTotal();
+
+  // Scroll to top
+  window.scrollTo(0, 0);
+}
+
 // Handle form submission
 document.getElementById('invoice-form').addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -602,15 +825,26 @@ document.getElementById('invoice-form').addEventListener('submit', async (e) => 
 
   // Collect products
   const products = [];
+  const discountInput = document.getElementById('discount');
+  const discount = discountInput ? (parseFloat(discountInput.value) || 0) : 0;
+
   for (let i = 1; i <= productCount; i++) {
     const name = formData.get(`product-${i}-name`);
-    const price = parseFloat(formData.get(`product-${i}-price`));
+    let price = parseFloat(formData.get(`product-${i}-price`));
     const quantity = parseInt(formData.get(`product-${i}-quantity`));
 
     if (name && price && quantity) {
+      const originalPrice = price;
+
+      // Apply discount to unit price
+      if (discount > 0) {
+        price = price * (1 - discount / 100);
+      }
+
       products.push({
         name,
-        price,
+        price, // Precio con descuento (si aplica)
+        originalPrice, // Precio original sin descuento
         quantity,
         total: price * quantity
       });
@@ -632,12 +866,15 @@ document.getElementById('invoice-form').addEventListener('submit', async (e) => 
   const iva = total - subtotal;
 
   const documentType = formData.get('document-type');
-  const documentNumber = await generateDocumentNumber(documentType);
+
+  // Use existing invoice number and entry date if editing
+  const documentNumber = isEditingInvoice ? editingInvoiceData.invoiceNumber : await generateDocumentNumber(documentType);
+  const entryDate = isEditingInvoice ? editingInvoiceData.entryDate : new Date().toLocaleDateString('ca-ES');
 
   const invoiceData = {
     invoiceNumber: documentNumber,
     documentType: documentType,
-    entryDate: new Date().toLocaleDateString('ca-ES'),
+    entryDate: entryDate,
     deliveryDate: formData.get('delivery-date') ? new Date(formData.get('delivery-date')).toLocaleDateString('ca-ES') : 'dd/mm/aaaa',
     client: formData.get('client'),
     phone: formData.get('phone'),
@@ -648,6 +885,8 @@ document.getElementById('invoice-form').addEventListener('submit', async (e) => 
     dni: formData.get('dni') || '',
     paymentMethod: formData.get('payment-method'),
     paidStatus: formData.get('paid-status'),
+    observations: formData.get('observations') || '',
+    discount: discount,
     products,
     subtotal,
     applyIva,
@@ -678,13 +917,23 @@ document.getElementById('invoice-form').addEventListener('submit', async (e) => 
 
         // Save to Supabase database
         showStatus('Guardant dades a Supabase...', 'success');
-        await saveInvoiceToSupabase(invoiceData, downloadLink);
+
+        if (isEditingInvoice) {
+          // Update existing invoice
+          await updateInvoiceInSupabase(invoiceData, downloadLink);
+        } else {
+          // Create new invoice
+          await saveInvoiceToSupabase(invoiceData, downloadLink);
+        }
+
         await saveClientToSupabase(invoiceData);
 
         if (emailSent) {
-          showStatus('✓ Factura generada, guardada i enviada correctament', 'success');
+          const message = isEditingInvoice ? '✓ Factura actualitzada i enviada correctament' : '✓ Factura generada, guardada i enviada correctament';
+          showStatus(message, 'success');
         } else {
-          showStatus('✓ Factura generada i guardada. Error en enviar el correu.', 'error');
+          const message = isEditingInvoice ? '✓ Factura actualitzada. Error en enviar el correu.' : '✓ Factura generada i guardada. Error en enviar el correu.';
+          showStatus(message, 'error');
         }
       } catch (uploadError) {
         console.error('Error pujant PDF:', uploadError);
@@ -741,6 +990,10 @@ document.getElementById('invoice-form').addEventListener('submit', async (e) => 
     });
 
     calculateTotal();
+
+    // Reset editing mode
+    isEditingInvoice = false;
+    editingInvoiceData = null;
 
   } catch (error) {
     console.error('Error:', error);
@@ -904,6 +1157,7 @@ async function loadInvoicesTable(startDate = null, endDate = null, documentNumbe
       <table>
         <thead>
           <tr>
+            <th>Accions</th>
             <th>Document</th>
             <th>Data d'Entrada</th>
             <th>Data d'Entrega</th>
@@ -919,6 +1173,7 @@ async function loadInvoicesTable(startDate = null, endDate = null, documentNumbe
         <tbody>
           ${invoices.map(inv => `
             <tr>
+              <td><a class="download-link" onclick="editInvoice('${inv.invoiceNumber}')">Editar</a></td>
               <td><strong>${inv.documentType} ${inv.invoiceNumber}</strong></td>
               <td>${inv.entryDate}</td>
               <td onclick="editDeliveryDate('${inv.invoiceNumber}')" style="cursor: pointer;" title="Clic per editar">${inv.deliveryDate}</td>
@@ -1045,6 +1300,7 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('product-1-price').addEventListener('input', calculateTotal);
   document.getElementById('product-1-quantity').addEventListener('input', calculateTotal);
   document.getElementById('apply-iva').addEventListener('change', calculateTotal);
+  document.getElementById('discount').addEventListener('input', calculateTotal);
 
   // Add product 2 checkbox listener
   document.getElementById('add-product-2').addEventListener('change', function (e) {

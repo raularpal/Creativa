@@ -208,9 +208,10 @@ input[type="checkbox"] {
 
 .payment-row {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 1fr 1fr 1fr;
   gap: 1rem;
   margin-top: 1rem;
+  align-items: end;
 }
 
 .payment-row .field-group,
@@ -293,6 +294,7 @@ textarea {
   background: white;
   color: var(--text-color);
   font-family: var(--font-family);
+  font-size: 1rem;
   transition: all 0.3s ease;
 }
 

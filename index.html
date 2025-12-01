@@ -105,6 +105,10 @@
 
         <div class="payment-row">
           <div class="field-group">
+            <label for="discount">Descompte (%):</label>
+            <input type="number" step="0.01" id="discount" name="discount" placeholder="0" />
+          </div>
+          <div class="field-group">
             <label for="payment-method">Mètode de pagament:</label>
             <select id="payment-method" name="payment-method">
               <option value="" selected>--</option>
@@ -112,6 +116,7 @@
               <option value="Targeta">Targeta</option>
               <option value="Transferència">Transferència</option>
               <option value="Bizum">Bizum</option>
+              <option value="Factura">Factura</option>
             </select>
           </div>
           <div class="field-group">
@@ -124,7 +129,11 @@
           </div>
         </div>
 
-
+        <div class="field-group">
+          <label for="observations">Observacions:</label>
+          <textarea id="observations" name="observations" rows="3"
+            placeholder="Escriu aquí qualsevol observació..."></textarea>
+        </div>
 
 
         <label for="delivery-date">Data d'entrega (Opcional):</label>
